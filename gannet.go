@@ -32,16 +32,9 @@ import (
 	"time"
 )
 
-// This is for cutting layres for parallel processing
-type LayerSegment struct {
-	From int
-	To   int
-}
-
 // The neural network
 type NNet struct {
-	segments [][]LayerSegment `json:"-"` // implementation helper
-	Layers   [][]*Neuron
+	Layers [][]*Neuron
 }
 
 // Createes a new network. The argument is an array of integers specifying the number of neurons in each layer. First
@@ -83,7 +76,6 @@ func NewNNet(layers []int, fun ActivationFunc) *NNet {
 			}
 		}
 	}
-	net.setSegments()
 
 	return &net
 }
@@ -101,52 +93,14 @@ func (net *NNet) zeroErrors() {
 	}
 }
 
-// Prepare layers segments by the number of available CPUs
-func (net *NNet) setSegments() {
-	var i, j int
-	var segment_lengths []int
-
-	cpus := runtime.NumCPU()
-	fmt.Println("Using", cpus, "CPUs for ")
-
-	net.segments = make([][]LayerSegment, len(net.Layers))
-	for i = 0; i < len(net.Layers); i++ {
-		// TODO: segment should not be smaller than certain number
-		base_len := len(net.Layers[i]) / cpus
-		reminder := int(math.Mod(float64(len(net.Layers[i])), float64(cpus)))
-		if base_len > 1 {
-			segment_lengths = make([]int, cpus)
-		} else {
-			segment_lengths = make([]int, len(net.Layers[i]))
-		}
-		net.segments[i] = make([]LayerSegment, len(segment_lengths))
-		for j = 0; j < len(segment_lengths); j++ {
-			segment_lengths[j] = base_len
-		}
-		for j = 0; j < reminder; j++ {
-			segment_lengths[j]++
-		}
-		tmp_index := 0
-		fmt.Printf("Layer %d (len %d): ", i, len(net.Layers[i]))
-		for j = 0; j < len(segment_lengths); j++ {
-			net.segments[i][j].From = tmp_index
-			fmt.Printf("[%d, ", net.segments[i][j].From)
-			tmp_index += segment_lengths[j]
-			net.segments[i][j].To = tmp_index
-			fmt.Printf("%d] (len %d); ", net.segments[i][j].To, segment_lengths[j])
-		}
-		fmt.Printf("\n")
-	}
-}
-
 // Computes output error and output layer gradients and weights for the given part of the output layer
 // Returns the sum of the output errors through the channel: this also denotes end of the computation
-func (net *NNet) computeOutputLayer(segment_num int, label []float64, output chan float64) {
+func (net *NNet) computeOutputLayer(label []float64) float64 {
 	var err_sum float64 = 0.0
 	var neuron *Neuron
 
 	layer_num := len(net.Layers) - 1
-	for j := net.segments[layer_num][segment_num].From; j < net.segments[layer_num][segment_num].To; j++ {
+	for j := 0; j < len(net.Layers[layer_num]); j++ {
 		neuron = net.Layers[layer_num][j]
 		err_sum += (label[j] - neuron.Out) * (label[j] - neuron.Out) / 2
 		neuron.Error = neuron.Activation.Prime(neuron.In) * (label[j] - neuron.Out)
@@ -154,19 +108,17 @@ func (net *NNet) computeOutputLayer(segment_num int, label []float64, output cha
 		neuron.update()
 	}
 
-	output <- err_sum
+	return err_sum
 }
 
 // Propagates error to the hidden//input layers, recomputes weights for the given part of the layer
 // Writes into the 'done' channel when finished
-func (net *NNet) propagateErrors(layer_num int, segment_num int, done chan bool) {
+func (net *NNet) propagateErrors(layer_num int) {
 	var neuron *Neuron
-	for j := net.segments[layer_num][segment_num].From; j < net.segments[layer_num][segment_num].To; j++ {
+	for j := 0; j < len(net.Layer[layer_num]); j++ {
 		neuron = net.Layers[layer_num][j]
 		neuron.update()
 	}
-
-	done <- true
 }
 
 // Computes one "epoch" of the training cycle: goest through the whole dataset in sequence
@@ -180,27 +132,12 @@ func (net *NNet) trainIteration(dataset []Dataset) (float64, error) {
 		net.feedForward(dataset[d].Data)
 		net.zeroErrors()
 		// traverse the net, compute errors, update weights
-		// FIXME: There should be a minimal segment length per goroutine and a worker pool
-		for i = len(net.Layers) - 1; i >= 1; i-- {
-			workers_num := len(net.segments[i])
+		for i = len(net.Layers) - 1; i >= 0; i-- {
 			if i == len(net.Layers)-1 {
-				output_channel := make(chan float64, workers_num)
-				for j = 0; j < workers_num-1; j++ {
-					go net.computeOutputLayer(j, dataset[d].Label, output_channel)
-				}
-				net.computeOutputLayer(workers_num-1, dataset[d].Label, output_channel)
-				for j = 0; j < workers_num; j++ {
-					output_error += <-output_channel
-				}
+				net.computeOutputLayer(dataset[d].Label)
+				output_error += net.computeOutputLayer(dataset[d].Label)
 			} else {
-				done := make(chan bool, workers_num)
-				for j = 0; j < workers_num-1; j++ {
-					go net.propagateErrors(i, j, done)
-				}
-				net.propagateErrors(i, workers_num-1, done)
-				for j = 0; j < workers_num; j++ {
-					<-done
-				}
+				net.propagateErrors(i)
 			}
 		}
 	}
