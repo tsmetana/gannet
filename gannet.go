@@ -25,10 +25,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
-	"runtime"
 	"time"
 )
 
@@ -115,7 +113,7 @@ func (net *NNet) computeOutputLayer(label []float64) float64 {
 // Writes into the 'done' channel when finished
 func (net *NNet) propagateErrors(layer_num int) {
 	var neuron *Neuron
-	for j := 0; j < len(net.Layer[layer_num]); j++ {
+	for j := 0; j < len(net.Layers[layer_num]); j++ {
 		neuron = net.Layers[layer_num][j]
 		neuron.update()
 	}
@@ -123,7 +121,7 @@ func (net *NNet) propagateErrors(layer_num int) {
 
 // Computes one "epoch" of the training cycle: goest through the whole dataset in sequence
 func (net *NNet) trainIteration(dataset []Dataset) (float64, error) {
-	var i, j, d int
+	var i, d int
 
 	output_error := 0.0
 	// iterate over the dataset
@@ -252,7 +250,6 @@ func NNetLoad(filename string) (*NNet, error) {
 			}
 		}
 	}
-	new_net.setSegments()
 
 	return &new_net, err
 }
